@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
+        findViewById<Button>(R.id.btnSettings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
         OverlayBus.connected.observeForever(connObserver)
         OverlayBus.translation.observeForever { refresh() }
     }
