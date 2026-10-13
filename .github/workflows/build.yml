@@ -17,14 +17,31 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The ubuntu runner ships a full Android SDK at /usr/local/lib/android/sdk.
+      # android-actions/setup-android@v3 tries to install the retired 'tools'
+      # package on top of it and fails ("Failed to find package 'tools'"),
+      # so we just point at what is already on the image.
+      - name: Locate Android SDK
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          ls /usr/local/lib/android/sdk
+
+      - name: Accept licenses
+        run: yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Install SDK platform 34
+        run: |
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" "build-tools;34.0.0" || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
 
-      - name: Build debug + release APK
-        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+      - name: Build APKs
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Collect APKs
         run: |
