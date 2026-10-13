@@ -8,6 +8,8 @@ on:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create a Release
     steps:
       - uses: actions/checkout@v4
 
@@ -43,10 +45,18 @@ jobs:
       - name: Build APKs
         run: gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Collect APKs
+      - name: Read version from build.gradle.kts
+        id: ver
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "detected version: $VERSION"
+
+      - name: Collect APK
         run: |
           mkdir -p out
-          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          find app/build/outputs/apk -name '*.apk' -exec cp {} out/livetranslate-${{ steps.ver.outputs.version }}.apk \;
           ls -la out
 
       - name: Upload APK artifact
@@ -55,3 +65,19 @@ jobs:
           name: apks
           path: out/*.apk
           if-no-files-found: error
+
+      # Publishing a Release is what lets the app's in-build update checker
+      # discover the new version through the GitHub Releases API.
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 同步翻译 ${{ steps.ver.outputs.version }}
+          body: |
+            自动构建于 ${{ github.sha }}
+
+            App 内「检查更新」会自动发现这个版本。
+          files: out/*.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
