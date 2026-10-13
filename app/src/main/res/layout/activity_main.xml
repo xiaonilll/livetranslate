@@ -33,13 +33,21 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
-        android:text="1. 开启无障碍服务" />
+        android:text="① 开启无障碍服务" />
 
     <Button
         android:id="@+id/btnOverlay"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
-        android:text="2. 启动 / 停止悬浮窗" />
+        android:text="② 启动悬浮窗" />
+
+    <Button
+        android:id="@+id/btnStop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#3A2226"
+        android:text="停止悬浮窗" />
 
 </LinearLayout>
