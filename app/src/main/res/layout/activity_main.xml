@@ -50,4 +50,11 @@
         android:backgroundTint="#3A2226"
         android:text="停止悬浮窗" />
 
+    <Button
+        android:id="@+id/btnSettings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="⚙ 翻译接口设置" />
+
 </LinearLayout>
