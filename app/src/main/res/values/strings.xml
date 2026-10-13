@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">同步翻译</string>
+    <string name="accessibility_label">同步翻译 · 输入监听</string>
+    <string name="accessibility_desc">读取当前输入框的文字，用于实时显示译文。文本仅发送到翻译接口，不做其它用途。</string>
+</resources>
