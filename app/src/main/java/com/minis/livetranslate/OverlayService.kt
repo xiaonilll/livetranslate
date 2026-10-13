@@ -8,20 +8,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
-import android.view.ViewTreeObserver
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.lifecycle.Observer
@@ -32,35 +27,37 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 /**
- * Keyboard-triggered translation bar.
+ * Keyboard-following translation bar.
  *
- * HOW THE KEYBOARD IS DETECTED
- * ---------------------------
- * Android has no public "is the soft keyboard visible" callback, and
- * AccessibilityService offers nothing usable for this (onComputeInsets is a
- * View/ViewGroup API, not an accessibility one - an earlier attempt used it and
- * did not compile).
+ * WINDOW TYPE MATTERS
+ * -------------------
+ * TYPE_APPLICATION_OVERLAY is layer 11; the soft keyboard (TYPE_INPUT_METHOD) is
+ * layer 13, so an application overlay is composited *underneath* the keyboard and
+ * gets covered by it. TYPE_ACCESSIBILITY_OVERLAY is layer 31 - above the IME -
+ * and is available to us because this app already runs an accessibility service.
  *
- * The technique used here is the one proven by Crysis21/KeyboardHeightProvider:
- * attach a full-height, fully transparent window and watch its own visible
- * display frame. When the IME appears the system shrinks that frame, and the
- * difference against the real screen height IS the keyboard height. The window
- * measures itself, so no privileged API is involved.
+ * POSITIONING
+ * -----------
+ * The bar is anchored to the keyboard's TOP EDGE with gravity TOP|START, not to
+ * bottom + keyboard height. A height offset is relative to a window origin that
+ * itself depends on insets, so the two never agree; the top edge is absolute.
+ * This also keeps working for floating/undocked keyboards, where an IME inset of
+ * zero would otherwise collapse the bar onto the screen bottom.
  *
- * The bar itself is only *added* while the keyboard is up, so it can never sit
- * over the home screen or an app that is not accepting input.
+ * VISIBILITY
+ * ----------
+ * The bar is added only while the keyboard is up, so it never lingers over the
+ * home screen or an app that is not accepting input.
  */
 class OverlayService : Service() {
 
     private lateinit var wm: WindowManager
-    private var probe: View? = null
-    private lateinit var probeLp: WindowManager.LayoutParams
+    private var probe: KeyboardProbeWindow? = null
 
     private var bar: LinearLayout? = null
-    private lateinit var barLp: WindowManager.LayoutParams
+    private var barLp: WindowManager.LayoutParams? = null
     private var attached = false
 
     private var srcView: TextView? = null
@@ -71,20 +68,17 @@ class OverlayService : Service() {
     private var debounceJob: Job? = null
     private var lastText: String = ""
 
-    private var lastImeHeight = -1
-    private var screenHeightPx = 0
-
     private val inputObserver = Observer<String> { onTextChanged(it) }
-    private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { measureKeyboard() }
 
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "onCreate")
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        screenHeightPx = resources.displayMetrics.heightPixels
         startForegroundSafely()
-        installProbe()
+
         OverlayBus.rawInput.observeForever(inputObserver)
+
+        probe = KeyboardProbeWindow(this, wm) { onKeyboardChanged() }.also { it.attach() }
     }
 
     private fun startForegroundSafely() {
@@ -120,112 +114,112 @@ class OverlayService : Service() {
         }
     }
 
-    /**
-     * A 1px wide, full height, invisible window that exists only to be resized
-     * by the IME. It is NOT_TOUCHABLE and NOT_FOCUSABLE so it can never
-     * intercept a tap or steal focus.
-     */
-    private fun installProbe() {
-        val v = View(this)
-        probeLp = WindowManager.LayoutParams(
-            1,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            overlayWindowType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
-        }
-        try {
-            wm.addView(v, probeLp)
-            probe = v
-            v.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
-            // Measure once in case a keyboard is already open.
-            Handler(Looper.getMainLooper()).postDelayed({ measureKeyboard() }, 300)
-            Log.i(TAG, "probe installed")
-        } catch (e: Exception) {
-            Log.e(TAG, "probe failed", e)
-        }
-    }
-
-    private fun overlayWindowType(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else
-            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-
-    /** Compare the probe's visible frame against the screen to derive IME height. */
-    private fun measureKeyboard() {
-        val v = probe ?: return
-        val visible = Rect()
-        v.getWindowVisibleDisplayFrame(visible)
-        val usableBottom = visible.bottom
-        // Anything below the visible frame's bottom is taken by the IME.
-        val imeHeight = (screenHeightPx - usableBottom).coerceAtLeast(0)
-        // Ignore the navigation bar sized noise: only react to real changes.
-        if (abs(imeHeight - lastImeHeight) < NAV_TOLERANCE_PX) return
-        lastImeHeight = imeHeight
-
-        val visibleNow = imeHeight > NAV_TOLERANCE_PX
-        Log.i(TAG, "ime height=$imeHeight visible=$visibleNow")
-        OverlayBus.imeHeightPx.value = imeHeight
-        OverlayBus.imeVisible.value = visibleNow
-
-        if (visibleNow) attachAndShow() else hideAndDetach()
-    }
-
     private fun dp(v: Float): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, resources.displayMetrics).toInt()
 
-    // ---- the bar -----------------------------------------------------------
+    // ---- react to the keyboard --------------------------------------------
 
-    private fun attachAndShow() {
-        if (attached) {
-            reposition(lastImeHeight)
+    private fun onKeyboardChanged() {
+        val p = probe ?: return
+        OverlayBus.imeVisible.value = p.isVisible
+        OverlayBus.imeHeightPx.value = p.keyboardTop?.let {
+            resources.displayMetrics.heightPixels - it
+        } ?: 0
+
+        if (p.isVisible && p.keyboardTop != null) {
+            showBarAbove(p.keyboardTop!!)
+        } else {
+            hideBar()
+        }
+    }
+
+    private fun showBarAbove(keyboardTop: Int) {
+        val existing = bar
+        if (existing == null) {
+            buildAndAttach(keyboardTop)
             return
         }
+        reposition(existing, keyboardTop)
+    }
+
+    private fun buildAndAttach(keyboardTop: Int) {
         try {
             val root = buildBar()
-            barLp = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                overlayWindowType(),
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.BOTTOM or Gravity.START
-                x = dp(6f)
-                y = lastImeHeight + dp(GAP_ABOVE_IME_DP)
-            }
-            wm.addView(root, barLp)
+            val lp = barParams(keyboardTop, root)
+            wm.addView(root, lp)
             bar = root
+            barLp = lp
             attached = true
-            Log.i(TAG, "bar attached y=${barLp.y}")
+            Log.i(TAG, "bar attached y=${lp.y}")
+            // Re-anchor once measured, since height may differ from the estimate.
+            root.post { reposition(root, probe?.keyboardTop ?: keyboardTop) }
         } catch (e: Exception) {
             Log.e(TAG, "bar attach failed", e)
         }
     }
 
-    private fun hideAndDetach() {
+    private fun barParams(keyboardTop: Int, view: View): WindowManager.LayoutParams {
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            accessibilityOverlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(6f)
+            y = computeY(keyboardTop, view.measuredHeight)
+            windowAnimations = 0
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            lp.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+        }
+        return lp
+    }
+
+    /**
+     * Keyboard top edge, minus the bar's own height and a small gap.
+     * Falls back to a sane estimate before the first measure pass.
+     */
+    private fun computeY(keyboardTop: Int, measuredHeight: Int): Int {
+        val h = if (measuredHeight > 0) measuredHeight else dp(BAR_HEIGHT_ESTIMATE_DP)
+        return (keyboardTop - h - dp(GAP_ABOVE_IME_DP)).coerceAtLeast(dp(4f))
+    }
+
+    private fun reposition(view: View, keyboardTop: Int) {
+        val lp = barLp ?: return
+        val newY = computeY(keyboardTop, view.measuredHeight)
+        if (lp.y == newY) return
+        lp.y = newY
+        runCatching { wm.updateViewLayout(view, lp) }
+            .onFailure { Log.w(TAG, "reposition failed", it) }
+    }
+
+    private fun hideBar() {
         debounceJob?.cancel()
         lastText = ""
-        if (!attached) return
-        bar?.let { runCatching { wm.removeView(it) } }
+        val b = bar ?: return
+        runCatching { wm.removeView(b) }
         bar = null
+        barLp = null
         attached = false
         Log.i(TAG, "bar detached")
     }
 
-    private fun reposition(imeHeight: Int) {
-        if (!attached) return
-        barLp.y = imeHeight + dp(GAP_ABOVE_IME_DP)
-        runCatching { wm.updateViewLayout(bar, barLp) }
-    }
+    /**
+     * TYPE_ACCESSIBILITY_OVERLAY (layer 31) so we draw above the IME (layer 13).
+     * Falls back to the application overlay type on old releases.
+     */
+    private fun accessibilityOverlayType(): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1)
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+        else
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+
+    // ---- the bar UI --------------------------------------------------------
 
     private fun buildBar(): LinearLayout {
         val root = LinearLayout(this).apply {
@@ -266,6 +260,7 @@ class OverlayService : Service() {
         if (text == lastText) return
         lastText = text
         debounceJob?.cancel()
+
         if (text.isBlank()) {
             statusView?.text = "等待输入…"
             dstView?.text = ""
@@ -273,6 +268,7 @@ class OverlayService : Service() {
             return
         }
         if (!attached) return
+
         statusView?.text = "翻译中…"
         debounceJob = scope.launch {
             delay(DEBOUNCE_MS)
@@ -284,6 +280,10 @@ class OverlayService : Service() {
                 dstView?.text = t.text
                 statusView?.text = "${t.src}→${t.dst} · ${t.ms}ms"
                 OverlayBus.translation.value = t
+                // Height changed as text grew; re-anchor.
+                val b = bar
+                val top = probe?.keyboardTop
+                if (b != null && top != null) reposition(b, top)
             } catch (e: Exception) {
                 if (attached) statusView?.text = "失败: ${e.message}"
                 Log.e(TAG, "translate failed", e)
@@ -298,10 +298,7 @@ class OverlayService : Service() {
         debounceJob?.cancel()
         scope.cancel()
         OverlayBus.rawInput.removeObserver(inputObserver)
-        probe?.viewTreeObserver?.let { vt ->
-            runCatching { vt.removeOnGlobalLayoutListener(layoutListener) }
-        }
-        probe?.let { runCatching { wm.removeView(it) } }
+        probe?.detach()
         probe = null
         bar?.let { runCatching { wm.removeView(it) } }
         bar = null
@@ -314,9 +311,8 @@ class OverlayService : Service() {
         private const val TAG = "LiveTranslate"
         private const val NOTIF_ID = 4421
         private const val CHANNEL_ID = "lt_overlay"
-        private const val GAP_ABOVE_IME_DP = 4f
-        /** Below this, treat the difference as nav-bar noise rather than an IME. */
-        private const val NAV_TOLERANCE_PX = 120
+        private const val GAP_ABOVE_IME_DP = 6f
+        private const val BAR_HEIGHT_ESTIMATE_DP = 64f
         const val DEBOUNCE_MS = 300L
     }
 }
