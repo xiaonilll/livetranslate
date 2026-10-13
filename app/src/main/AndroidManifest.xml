@@ -24,6 +24,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_title"
+            android:parentActivityName=".MainActivity" />
+
         <!-- Floating bar owner. The class is OverlayService; an earlier manifest
              declared a non-existent "LiveTranslateService", so the service was
              never registered and startService() failed silently. -->
