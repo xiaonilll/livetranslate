@@ -173,7 +173,7 @@ class OverlayService : Service() {
             delay(DEBOUNCE_MS)
             statusView?.text = "翻译中…"
             try {
-                val t = Translator.translate(text)
+                val t = Translator.translate(applicationContext, text)
                 srcView?.text = text
                 dstView?.text = t.text
                 statusView?.text = "${t.src} → ${t.dst} · ${t.ms}ms"
