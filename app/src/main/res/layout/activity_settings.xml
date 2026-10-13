@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="翻译接口设置"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:alpha="0.6"
+            android:text="默认使用 Google 免费端点，开箱可用；也可换成自己的 Key 或自建服务"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="引擎 / 预设"
+            android:textSize="13sp" />
+
+        <Spinner
+            android:id="@+id/spPreset"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
+
+        <TextView style="@style/FieldLabel" android:text="接口地址 (Endpoint)" />
+        <EditText
+            android:id="@+id/etEndpoint"
+            style="@style/FieldInput"
+            android:hint="https://..."
+            android:inputType="textUri" />
+
+        <TextView style="@style/FieldLabel" android:text="API Key（留空则不发送）" />
+        <EditText
+            android:id="@+id/etKey"
+            style="@style/FieldInput"
+            android:hint="sk-... / 你的密钥"
+            android:inputType="textPassword" />
+
+        <TextView style="@style/FieldLabel" android:text="模型（仅 OpenAI 兼容接口需要）" />
+        <EditText
+            android:id="@+id/etModel"
+            style="@style/FieldInput"
+            android:hint="gpt-4o-mini"
+            android:inputType="text" />
+
+        <TextView style="@style/FieldLabel" android:text="认证请求头名称" />
+        <EditText
+            android:id="@+id/etAuthHeader"
+            style="@style/FieldInput"
+            android:hint="Authorization"
+            android:inputType="text" />
+
+        <TextView style="@style/FieldLabel" android:text="认证前缀" />
+        <EditText
+            android:id="@+id/etAuthPrefix"
+            style="@style/FieldInput"
+            android:hint="Bearer "
+            android:inputType="text" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView style="@style/FieldLabel" android:text="源语言" />
+                <EditText
+                    android:id="@+id/etSrc"
+                    style="@style/FieldInput"
+                    android:hint="auto"
+                    android:inputType="text" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView style="@style/FieldLabel" android:text="目标语言" />
+                <EditText
+                    android:id="@+id/etDst"
+                    style="@style/FieldInput"
+                    android:hint="auto"
+                    android:inputType="text" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:text="测试连接（翻译「你好，世界」）" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="保存" />
+
+        <Button
+            android:id="@+id/btnReset"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="恢复默认" />
+
+        <TextView
+            android:id="@+id/tvHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:lineSpacingExtra="3dp"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+</ScrollView>
