@@ -24,8 +24,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Floating bar owner. The class is OverlayService; an earlier manifest
+             declared a non-existent "LiveTranslateService", so the service was
+             never registered and startService() failed silently. -->
         <service
-            android:name=".LiveTranslateService"
+            android:name=".OverlayService"
+            android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
@@ -35,6 +39,7 @@
 
         <service
             android:name=".InputWatcherService"
+            android:enabled="true"
             android:exported="true"
             android:label="@string/accessibility_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
