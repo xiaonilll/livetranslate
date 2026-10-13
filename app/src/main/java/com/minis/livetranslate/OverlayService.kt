@@ -6,11 +6,13 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.WindowManager
@@ -28,9 +30,9 @@ import kotlinx.coroutines.launch
 /**
  * Owns the floating bar and the debounce loop.
  *
- * The debounce lives here (not in the accessibility service) so that a burst of
- * keystrokes collapses into exactly one API call, and so a slower in-flight
- * request can be cancelled the moment the text changes again.
+ * The debounce lives here (not in the accessibility service) so a burst of
+ * keystrokes collapses into one API call, and an in-flight request is dropped
+ * the moment the text changes again.
  */
 class OverlayService : Service() {
 
@@ -44,12 +46,11 @@ class OverlayService : Service() {
     private var debounceJob: Job? = null
     private var lastText: String = ""
 
-    private val inputObserver = Observer<String> { text ->
-        onTextChanged(text)
-    }
+    private val inputObserver = Observer<String> { text -> onTextChanged(text) }
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "onCreate")
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForegroundSafely()
         buildBar()
@@ -57,25 +58,39 @@ class OverlayService : Service() {
     }
 
     private fun startForegroundSafely() {
-        val chId = "lt_overlay"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val mgr = getSystemService(NotificationManager::class.java)
-            if (mgr.getNotificationChannel(chId) == null) {
-                mgr.createNotificationChannel(
-                    NotificationChannel(chId, "Live Translate",
-                        NotificationManager.IMPORTANCE_MIN)
-                )
+        try {
+            val chId = CHANNEL_ID
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val mgr = getSystemService(NotificationManager::class.java)
+                if (mgr.getNotificationChannel(chId) == null) {
+                    mgr.createNotificationChannel(
+                        NotificationChannel(chId, "同步翻译", NotificationManager.IMPORTANCE_MIN)
+                    )
+                }
             }
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, chId)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this)
+            }
+            val n = builder
+                .setContentTitle("同步翻译运行中")
+                .setContentText("在输入框打字即可看到译文")
+                .setSmallIcon(android.R.drawable.ic_menu_edit)
+                .setOngoing(true)
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, n)
+            }
+            Log.i(TAG, "foreground started")
+        } catch (e: Exception) {
+            // A failed startForeground must not take the overlay down with it.
+            Log.e(TAG, "startForeground failed", e)
         }
-        val n = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, chId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }.setContentTitle("同步翻译运行中")
-            .setSmallIcon(android.R.drawable.ic_menu_edit)
-            .build()
-        startForeground(NOTIF_ID, n)
     }
 
     private fun dp(v: Int): Int = TypedValue.applyDimension(
@@ -114,24 +129,31 @@ class OverlayService : Service() {
         root.addView(srcView)
         root.addView(dstView)
 
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        else
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.START
             x = dp(8)
-            y = dp(120)
+            y = dp(160)
         }
-        wm.addView(root, lp)
-        bar = root
+        try {
+            wm.addView(root, lp)
+            bar = root
+            Log.i(TAG, "overlay attached")
+        } catch (e: Exception) {
+            Log.e(TAG, "addView failed", e)
+            statusView?.text = "悬浮窗创建失败: ${e.message}"
+        }
     }
 
     private fun onTextChanged(text: String) {
@@ -155,13 +177,22 @@ class OverlayService : Service() {
                 srcView?.text = text
                 dstView?.text = t.text
                 statusView?.text = "${t.src} → ${t.dst} · ${t.ms}ms"
+                OverlayBus.translation.value = t
+                Log.i(TAG, "translated ${t.ms}ms")
             } catch (e: Exception) {
                 statusView?.text = "失败: ${e.message}"
+                Log.e(TAG, "translate failed", e)
             }
         }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // If MIUI kills and restarts us, come back in the same state.
+        return START_STICKY
+    }
+
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy")
         debounceJob?.cancel()
         scope.cancel()
         OverlayBus.rawInput.removeObserver(inputObserver)
@@ -173,7 +204,9 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val TAG = "LiveTranslate"
         private const val NOTIF_ID = 4421
+        private const val CHANNEL_ID = "lt_overlay"
         const val DEBOUNCE_MS = 300L
     }
 }
