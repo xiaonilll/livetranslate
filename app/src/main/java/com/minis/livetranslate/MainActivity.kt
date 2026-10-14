@@ -57,6 +57,19 @@ class MainActivity : AppCompatActivity() {
             checkForUpdates(userInitiated = true)
         }
 
+        // The test field drives the same pipeline as a third-party app: the
+        // accessibility service sees the text change and the overlay translates it.
+        // Typing here is the shortest way to verify the keyboard-follow behaviour.
+        val et = findViewById<android.widget.EditText>(R.id.etTest)
+        et.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+            override fun afterTextChanged(s: android.text.Editable?) {
+                OverlayBus.rawInput.value = s?.toString().orEmpty()
+            }
+        })
+        et.requestFocus()
+
         OverlayBus.connected.observeForever(connObserver)
         OverlayBus.overlayRunning.observeForever(runningObserver)
         OverlayBus.imeVisible.observeForever(imeObserver)
