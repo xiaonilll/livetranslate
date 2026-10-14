@@ -56,7 +56,8 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p out
-          find app/build/outputs/apk -name '*.apk' -exec cp {} out/livetranslate-${{ steps.ver.outputs.version }}.apk \;
+          APK=$(find app/build/outputs/apk -name '*.apk' | head -1)
+          cp "$APK" "out/livetranslate-${{ steps.ver.outputs.version }}.apk"
           ls -la out
 
       - name: Upload APK artifact
