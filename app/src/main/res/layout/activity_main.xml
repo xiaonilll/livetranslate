@@ -24,9 +24,22 @@
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="28dp"
+        android:layout_marginTop="20dp"
         android:textSize="15sp"
         android:lineSpacingExtra="4dp" />
+
+    <!-- Test field: tapping it raises the keyboard inside this app, which makes
+         the keyboard-following behaviour verifiable without switching apps. -->
+    <EditText
+        android:id="@+id/etTest"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:hint="在这里打字测试（点这里弹出键盘）"
+        android:importantForAutofill="no"
+        android:inputType="textMultiLine"
+        android:minLines="2"
+        android:textSize="15sp" />
 
     <Button
         android:id="@+id/btnAccess"
