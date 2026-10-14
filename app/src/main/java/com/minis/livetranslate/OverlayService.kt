@@ -76,6 +76,7 @@ class OverlayService : Service() {
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForegroundSafely()
 
+        OverlayBus.overlayRunning.value = true
         OverlayBus.rawInput.observeForever(inputObserver)
 
         probe = KeyboardProbeWindow(this, wm) { onKeyboardChanged() }.also { it.attach() }
@@ -295,6 +296,7 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy")
+        OverlayBus.overlayRunning.value = false
         debounceJob?.cancel()
         scope.cancel()
         OverlayBus.rawInput.removeObserver(inputObserver)
