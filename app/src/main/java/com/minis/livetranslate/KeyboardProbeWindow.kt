@@ -3,44 +3,38 @@ package com.minis.livetranslate
 import android.content.Context
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
-import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.view.WindowManager
 import kotlin.math.max
 
 /**
- * Invisible 1px-wide, full-height window whose only job is to be resized by the
- * soft keyboard.
+ * Invisible window whose job is to be resized by the soft keyboard.
  *
- * WHY THIS EXISTS
- * ---------------
- * Android exposes no public "is the IME up" callback. The accessibility window
- * list is the only keyboard signal an AccessibilityService gets on its own, and
- * it lags badly, flaps during the open/close animation, and misses keyboards that
- * publish no accessibility tree. An overlay window, by contrast, is laid out by
- * the WindowManager like any other window: it is resized when the keyboard
- * appears, which yields an exact, event-driven signal.
+ * HISTORY / WHY THIS IS SO CONVOLUTED
+ * -----------------------------------
+ * Four approaches were tried and the first three failed on this device:
+ *  1. AccessibilityService.onComputeInsets() - does not exist on that class.
+ *  2. TYPE_APPLICATION_OVERLAY at (1, MATCH_PARENT) - the WM resolved the height
+ *     to 1px (dumpsys: contentSize=2976x1), so the IME never resized it.
+ *  3. Explicit size + OnGlobalLayoutListener - the probe measured 2976 and then
+ *     never changed: an overlay window is not re-laid-out when the IME opens.
  *
- * Two independent sources are combined because neither alone is reliable:
- *   A. WindowInsets.Type.ime() on this window - exact, but returns NONE on
- *      floating/undocked keyboards.
- *   B. getWindowVisibleDisplayFrame() delta - survives the floating case, but is
- *      polluted by the navigation bar.
- * A "proven" latch prevents false negatives before the first sighting.
- *
- * Technique derived from writingmate/aidictation's KeyboardProbeWindow; the
- * layout API is updated for API 30+ (setFitInsetsTypes replaces the old
- * SOFT_INPUT_ADJUST_RESIZE approach).
+ * So the probe no longer waits to be resized. It POLLS getWindowVisibleDisplayFrame()
+ * on a timer, which reports the frame the window would occupy - and that value
+ * does shrink while the keyboard is up, even though no relayout is delivered.
+ * Polling is cheap (this is one Rect read per tick) and the interval is short
+ * enough to feel instant.
  */
 class KeyboardProbeWindow(
     private val context: Context,
     private val wm: WindowManager,
     private val onChanged: () -> Unit,
 ) {
-    /** Top edge of the keyboard in screen coordinates, or null when hidden. */
     var keyboardTop: Int? = null
         private set
 
@@ -49,38 +43,27 @@ class KeyboardProbeWindow(
 
     private var view: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
-
     private var tallestSeen = 0
-    private var layoutSaysVisible = false
-    private var insetsSayVisible = false
-    private var layoutKeyboardTop: Int? = null
-    private var insetsKeyboardTop: Int? = null
 
-    /** Once the keyboard has been seen even once, trust transitions over the latch. */
-    private var proven = false
+    private val handler = Handler(Looper.getMainLooper())
+    private var polling = false
 
-    private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { onLayout() }
-    private var insetsListener: View.OnApplyWindowInsetsListener? = null
+    private val poll = object : Runnable {
+        override fun run() {
+            sample()
+            if (polling) handler.postDelayed(this, POLL_MS)
+        }
+    }
 
-    private fun minimumKeyboardPx(): Int = dp(MINIMUM_KEYBOARD_DP)
+    private val layoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener { sample() }
 
     private fun dp(v: Int): Int = (v * context.resources.displayMetrics.density).toInt()
 
     private fun screenHeight(): Int = context.resources.displayMetrics.heightPixels
 
-    private fun screenY(v: View): Int {
-        val loc = IntArray(2)
-        v.getLocationOnScreen(loc)
-        return loc[1]
-    }
-
     fun attach() {
         if (view != null) return
         val v = View(context)
-        // The probe must be a TALL, FULL-WIDTH window for the IME to shrink it.
-        // An earlier version used (1, MATCH_PARENT) and dumpsys showed the result
-        // was contentSize=2976x1 - a 1px tall window the keyboard never resizes,
-        // so onLayout never fired. Both dimensions are now explicit.
         val screenH = context.resources.displayMetrics.heightPixels
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -95,13 +78,11 @@ class KeyboardProbeWindow(
             x = 0
             y = 0
             windowAnimations = 0
-            // Not fully transparent: some OEM builds skip layout for alpha==0
-            // windows. 0.01 is invisible to the eye but still laid out.
+            // Not alpha 0: some builds skip layout entirely for fully
+            // transparent windows. 0.01 is invisible but still laid out.
             alpha = 0.01f
         }
 
-        // Let the WindowManager resize us when the keyboard appears, and deliver
-        // the IME insets. Without this the probe never shrinks and source A is dead.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             lp.fitInsetsTypes = WindowInsets.Type.systemBars() or WindowInsets.Type.ime()
         }
@@ -116,29 +97,18 @@ class KeyboardProbeWindow(
             Log.e(TAG, "probe attach failed", e)
             return
         }
-
         view = v
         layoutParams = lp
         v.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val l = View.OnApplyWindowInsetsListener { _, insets ->
-                val bottom = insets.getInsets(WindowInsets.Type.ime()).bottom
-                val visible = insets.isVisible(WindowInsets.Type.ime()) && bottom > 0
-                insetsSayVisible = visible
-                insetsKeyboardTop = if (visible) screenY(v) + v.height - bottom else null
-                publish()
-                insets
-            }
-            insetsListener = l
-            v.setOnApplyWindowInsetsListener(l)
-            // An initial pass so a keyboard that is already open is caught.
-            v.requestApplyInsets()
-        }
-        Log.i(TAG, "probe attached, size=${lp.width}x${lp.height}")
+        polling = true
+        handler.post(poll)
+        Log.i(TAG, "probe attached ${lp.width}x${lp.height}, polling every ${POLL_MS}ms")
     }
 
     fun detach() {
+        polling = false
+        handler.removeCallbacks(poll)
         val v = view ?: return
         runCatching { v.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener) }
         runCatching { wm.removeView(v) }
@@ -149,52 +119,38 @@ class KeyboardProbeWindow(
     }
 
     /**
-     * The probe is full height; when the keyboard opens the WindowManager shrinks
-     * it, and the shortfall against the tallest height ever seen IS the keyboard.
+     * Read the window's usable frame. getWindowVisibleDisplayFrame reports the
+     * area not covered by system UI, so it shrinks by exactly the keyboard height
+     * while the IME is up - regardless of whether a relayout was delivered.
      */
-    private fun onLayout() {
+    private fun sample() {
         val v = view ?: return
-        val height = v.height
-        if (height <= 0) return
-        tallestSeen = max(tallestSeen, height)
-        val visible = isKeyboardHeight(tallestSeen, height, minimumKeyboardPx())
-        Log.d(TAG, "onLayout h=$height tallest=$tallestSeen visible=$visible")
-        layoutSaysVisible = visible
-        layoutKeyboardTop = if (visible) screenY(v) + height else null
-        publish()
-    }
+        val frame = Rect()
+        v.getWindowVisibleDisplayFrame(frame)
+        val usable = frame.bottom - frame.top
+        if (usable <= 0) return
 
-    /**
-     * A soft keyboard is at least 120dp tall, which is what separates it from the
-     * few pixels of ordinary layout churn.
-     */
-    private fun isKeyboardHeight(full: Int, current: Int, minimum: Int): Boolean =
-        full > 0 && current > 0 && (full - current) >= minimum
-
-    private fun publish() {
-        val visible = layoutSaysVisible || insetsSayVisible
-        // Sources B then A: the layout delta handles floating keyboards, the
-        // inset is more precise when present.
-        val top = layoutKeyboardTop ?: insetsKeyboardTop
-
-        val previousVisible = isVisible
-        val previousTop = keyboardTop
-        isVisible = visible
-        keyboardTop = if (visible) top else null
-
-        // The first sighting proves this device signals at all; before that we
-        // stay quiet rather than flapping on startup.
-        if (visible) proven = true
-
-        val changed = if (proven) {
-            previousVisible != isVisible || previousTop != keyboardTop
+        val screenH = screenHeight()
+        // Height of the dead zone below the usable area.
+        val bottomGap = screenH - frame.bottom
+        if (bottomGap >= NAV_TOLERANCE_PX) {
+            // Something tall is covering the bottom: that is the keyboard.
+            val top = frame.bottom
+            val changed = !isVisible || keyboardTop != top
+            tallestSeen = max(tallestSeen, usable)
+            isVisible = true
+            keyboardTop = top
+            if (changed) {
+                Log.i(TAG, "keyboard UP top=$top gap=$bottomGap usable=$usable")
+                onChanged()
+            }
         } else {
-            false
-        }
-        if (changed) {
-            Log.i(TAG, "ime visible=$isVisible top=$keyboardTop " +
-                "(layout=$layoutKeyboardTop insets=$insetsKeyboardTop)")
-            onChanged()
+            if (isVisible) {
+                Log.i(TAG, "keyboard DOWN (gap=$bottomGap)")
+                isVisible = false
+                keyboardTop = null
+                onChanged()
+            }
         }
     }
 
@@ -204,11 +160,10 @@ class KeyboardProbeWindow(
         else
             @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
-    /** Diagnostics for the HyperOS dead-strip problem. */
-    fun debugBounds(): Rect? = view?.let { Rect(0, 0, it.width, it.height) }
-
     companion object {
         private const val TAG = "LiveTranslate"
-        private const val MINIMUM_KEYBOARD_DP = 120
+        /** Anything taller than this below the usable area is a keyboard, not a nav bar. */
+        private const val NAV_TOLERANCE_PX = 150
+        private const val POLL_MS = 120L
     }
 }
