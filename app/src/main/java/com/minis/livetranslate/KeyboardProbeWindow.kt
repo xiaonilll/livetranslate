@@ -77,18 +77,27 @@ class KeyboardProbeWindow(
     fun attach() {
         if (view != null) return
         val v = View(context)
+        // The probe must be a TALL, FULL-WIDTH window for the IME to shrink it.
+        // An earlier version used (1, MATCH_PARENT) and dumpsys showed the result
+        // was contentSize=2976x1 - a 1px tall window the keyboard never resizes,
+        // so onLayout never fired. Both dimensions are now explicit.
+        val screenH = context.resources.displayMetrics.heightPixels
         val lp = WindowManager.LayoutParams(
-            1,
             WindowManager.LayoutParams.MATCH_PARENT,
+            screenH,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             android.graphics.PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
             windowAnimations = 0
+            // Not fully transparent: some OEM builds skip layout for alpha==0
+            // windows. 0.01 is invisible to the eye but still laid out.
+            alpha = 0.01f
         }
 
         // Let the WindowManager resize us when the keyboard appears, and deliver
@@ -126,7 +135,7 @@ class KeyboardProbeWindow(
             // An initial pass so a keyboard that is already open is caught.
             v.requestApplyInsets()
         }
-        Log.i(TAG, "probe attached")
+        Log.i(TAG, "probe attached, size=${lp.width}x${lp.height}")
     }
 
     fun detach() {
@@ -149,6 +158,7 @@ class KeyboardProbeWindow(
         if (height <= 0) return
         tallestSeen = max(tallestSeen, height)
         val visible = isKeyboardHeight(tallestSeen, height, minimumKeyboardPx())
+        Log.d(TAG, "onLayout h=$height tallest=$tallestSeen visible=$visible")
         layoutSaysVisible = visible
         layoutKeyboardTop = if (visible) screenY(v) + height else null
         publish()
